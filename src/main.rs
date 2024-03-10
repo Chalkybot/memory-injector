@@ -72,6 +72,7 @@ impl WindowsProcess {
     }
 }
 
+// Enumerate every windows process.
 fn enumerate_processes() -> Result<Vec<u32>, windows::core::Error> {
     let mut pids = vec![0u32; 1024];
     let mut bytes_returned = 0u32;
@@ -101,6 +102,7 @@ fn get_handle(pid: u32) -> Result<HANDLE, windows::core::Error> {
     Ok(handle)
 }
 
+// Turn a handle to a process name.
 fn get_process_name(handle: &HANDLE) -> Result<PathBuf, windows::core::Error> {
     let mut return_buffer: Vec<u16> = vec![0; 1024];
     let buffer_ptr = PWSTR::from_raw(return_buffer.as_mut_ptr());
@@ -122,6 +124,7 @@ fn get_process_name(handle: &HANDLE) -> Result<PathBuf, windows::core::Error> {
     Ok(PathBuf::from(String::from_utf16_lossy(&return_buffer)))
 }
 
+// Create a handle to a snapshot of the process memory
 fn create_snapshot(pid: u32) -> Result<HANDLE, windows::core::Error> {
     let flags = CREATE_TOOLHELP_SNAPSHOT_FLAGS(0x00000008);
     let mut snapshot_handle = HANDLE::default();
@@ -134,6 +137,7 @@ fn create_snapshot(pid: u32) -> Result<HANDLE, windows::core::Error> {
     Ok(snapshot_handle)
 }
 
+// Fetch the first or next module from a process using a snapshot handle.
 fn get_module(snapshot_handle: &HANDLE, first: bool) -> Result<MODULEENTRY32W, windows::core::Error> { 
     let module_call = match first {  
         true  => Module32FirstW,
@@ -150,6 +154,7 @@ fn get_module(snapshot_handle: &HANDLE, first: bool) -> Result<MODULEENTRY32W, w
     Ok(module_entry)
 } 
 
+// Find the first memory location of a program.
 fn get_base_address(pid: u32, target_module: &str) -> Result<*mut u8, windows::core::Error> {
     let mut base_address = 0 as *mut u8;
     let snapshot_handle = create_snapshot(pid)?;
@@ -164,6 +169,7 @@ fn get_base_address(pid: u32, target_module: &str) -> Result<*mut u8, windows::c
     Ok(base_address)
 }
 
+// Check whether or not a memory location can be modified.
 fn check_memory_status(handle: HANDLE, address: u64, ) -> Result<(MEMORY_BASIC_INFORMATION, bool), windows::core::Error> {
     let mut memory_info: MEMORY_BASIC_INFORMATION = MEMORY_BASIC_INFORMATION::default();
     unsafe {
@@ -191,7 +197,7 @@ fn check_memory_status(handle: HANDLE, address: u64, ) -> Result<(MEMORY_BASIC_I
     };
     Ok((memory_info, can_overwrite))
 }
-
+// Read a process' memory location. Reads the asked amount and returns a vector of u8, u64 or any otherwise defined structure.
 fn read_process_memory<T: Copy + Default>(handle: &HANDLE, address: u64, amount_to_read: usize) -> Result<Vec<T>, windows::core::Error> {
     // Let's firstly prepare the types.
     let base_address = address as *const c_void;
@@ -211,6 +217,7 @@ fn read_process_memory<T: Copy + Default>(handle: &HANDLE, address: u64, amount_
     Ok(buffer)
 }
 
+// Writes to memory. Requires the read_process_memory, as the write is verified with a read.
 fn write_process_memory<T: Copy + Default + std::cmp::PartialEq>(handle: &HANDLE, address: u64, content: Vec<T>) -> Result<bool, windows::core::Error> {
     // Define variables
     let base_address = address as *const c_void;
@@ -234,6 +241,25 @@ fn write_process_memory<T: Copy + Default + std::cmp::PartialEq>(handle: &HANDLE
     Ok(false)
 }
 
+// Messing around with reading process memory. Attempts to map out memory to utf8. Changing the read_size can yield more readable utf8.
+fn dump_process_memory(handle: &HANDLE, base_address: u64, read_size: usize) {
+    let mut loop_index = 0;
+    loop { 
+        match read_process_memory::<u8>(&handle, base_address + loop_index, read_size){ 
+            Err(e)          => break,
+            Ok(memory_read) => {
+                let potential_text =String::from_utf8_lossy(&memory_read).replace('\u{FFFD}', ".");
+                let hex: String = memory_read.iter().map(|b| format!("{:02X}", b)).collect();
+                let hex_string = format!("0x{}", hex);
+                println!("{:#x} -> {:?} => {}", (base_address  as u64) + loop_index, hex_string, potential_text)
+            
+            },
+        }
+        loop_index += read_size as u64;
+    }
+
+}
+
 fn main() {
     let process_list = enumerate_processes().unwrap();
     let mut formatted_list: Vec<WindowsProcess> = Vec::new();
@@ -254,21 +280,20 @@ fn main() {
     let current_process = &formatted_list[&formatted_list.len() - 1];
     // Print process information
     println!("Selected process: {}, pid: {}", &current_process.process_name, &current_process.pid);
-    
+
     // Fetch the base address.
-    let addr = get_base_address(current_process.pid, &current_process.process_name).unwrap();
+    let base_address = get_base_address(current_process.pid, &current_process.process_name).unwrap();
+    
     /* Using a known good location for testing */
     let some_variable: u32 = 12345;
     let variable_address = &some_variable as *const _ as u64;
-    let page_status = check_memory_status(current_process.handle, variable_address).unwrap();
+
+    // Verifying if the page can be written to or not.
+    let page_status = check_memory_status(current_process.handle, base_address as u64).unwrap();
     if page_status.1 == false { 
-        panic!("Page at {:?} marked as {:?}", variable_address, page_status.0);
+        panic!("Page at {:?} marked as {:?}", base_address, page_status.0);
     }
-    let contents = read_process_memory::<u32>(&current_process.handle, variable_address, std::mem::size_of::<u32>()).unwrap()[0];
-    println!("Contents of location {:#x} -> {}", variable_address, contents);
-    let written = write_process_memory(&current_process.handle, variable_address, vec![22222u32]);
-    
-    match written { 
+    match write_process_memory(&current_process.handle, variable_address, vec![22222u32]) { 
         Err(e) => println!("Error: {:?}", e),
         Ok(result) => { 
             match result {
@@ -277,5 +302,6 @@ fn main() {
             }
         }
     }
-    
+    dump_process_memory(&current_process.handle, base_address as u64, 16);
+       
 }
