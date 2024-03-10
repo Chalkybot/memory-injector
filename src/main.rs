@@ -5,7 +5,7 @@ use windows::Win32::{
             Debug::{ReadProcessMemory, WriteProcessMemory},
             ToolHelp::{CREATE_TOOLHELP_SNAPSHOT_FLAGS, CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, MODULEENTRY32W},
         },
-        Memory::{MEMORY_BASIC_INFORMATION, VirtualQueryEx},
+        Memory::{self, MEMORY_BASIC_INFORMATION, VirtualQueryEx},
         ProcessStatus::EnumProcesses,
         Threading::{OpenProcess, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_FORMAT, QueryFullProcessImageNameW},
     },
@@ -164,7 +164,7 @@ fn get_base_address(pid: u32, target_module: &str) -> Result<*mut u8, windows::c
     Ok(base_address)
 }
 
-fn check_memory_status(handle: HANDLE, address: u64, ) -> Result<MEMORY_BASIC_INFORMATION, windows::core::Error> {
+fn check_memory_status(handle: HANDLE, address: u64, ) -> Result<(MEMORY_BASIC_INFORMATION, bool), windows::core::Error> {
     let mut memory_info: MEMORY_BASIC_INFORMATION = MEMORY_BASIC_INFORMATION::default();
     unsafe {
         if VirtualQueryEx(
@@ -176,8 +176,21 @@ fn check_memory_status(handle: HANDLE, address: u64, ) -> Result<MEMORY_BASIC_IN
             return Err(GetLastError().into());
         }
     }
-    Ok(memory_info)
+    let can_overwrite = match &memory_info.AllocationProtect {
+        Memory::PAGE_EXECUTE => false,
+        Memory::PAGE_EXECUTE_READ => false,
+        Memory::PAGE_EXECUTE_READWRITE => true,
+        Memory::PAGE_EXECUTE_WRITECOPY => true,
+        Memory::PAGE_NOACCESS => false,
+        Memory::PAGE_READONLY => false,
+        Memory::PAGE_READWRITE => true,
+        Memory::PAGE_WRITECOPY => true,
+        Memory::PAGE_TARGETS_INVALID => false,
+        Memory::PAGE_TARGETS_NO_UPDATE => false,
+    }
+    Ok((memory_info, can_overwrite))
 }
+
 
 fn read_process_memory<T: Copy + Default>(handle: &HANDLE, address: u64, amount_to_read: usize) -> Result<Vec<T>, windows::core::Error> {
     // Let's firstly prepare the types.
@@ -250,6 +263,7 @@ fn main() {
     let contents = read_process_memory::<u32>(&current_process.handle, variable_address, std::mem::size_of::<u32>()).unwrap()[0];
     println!("Contents of location {:#x} -> {}", variable_address, contents);
     let written = write_process_memory(&current_process.handle, variable_address, vec![22222u32]);
+    
     match written { 
         Err(e) => println!("Error: {:?}", e),
         Ok(result) => { 
@@ -260,6 +274,5 @@ fn main() {
         }
     }
     
-    let memory_status = check_memory_status(current_process.handle, variable_address);
-
+    let memory_status = check_memory_status(current_process.handle, variable_address).unwrap();
 }
