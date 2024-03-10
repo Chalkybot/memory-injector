@@ -176,7 +176,7 @@ fn check_memory_status(handle: HANDLE, address: u64, ) -> Result<(MEMORY_BASIC_I
             return Err(GetLastError().into());
         }
     }
-    let can_overwrite = match &memory_info.AllocationProtect {
+    let can_overwrite = match memory_info.AllocationProtect {
         Memory::PAGE_EXECUTE => false,
         Memory::PAGE_EXECUTE_READ => false,
         Memory::PAGE_EXECUTE_READWRITE => true,
@@ -187,7 +187,8 @@ fn check_memory_status(handle: HANDLE, address: u64, ) -> Result<(MEMORY_BASIC_I
         Memory::PAGE_WRITECOPY => true,
         Memory::PAGE_TARGETS_INVALID => false,
         Memory::PAGE_TARGETS_NO_UPDATE => false,
-    }
+        _ => false,
+    };
     Ok((memory_info, can_overwrite))
 }
 
