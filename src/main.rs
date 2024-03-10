@@ -162,15 +162,13 @@ fn read_process_memory<T: Copy + Default>(handle: &HANDLE, address: u64, amount_
     Ok(buffer)
 }
 
-
-fn write_process_memory<T>(handle: &HANDLE, address: u64, content: Vec<T>) -> Result<(), windows::core::Error> {
-
+fn write_process_memory<T: Copy + Default + std::cmp::PartialEq>(handle: &HANDLE, address: u64, content: Vec<T>) -> Result<bool, windows::core::Error> {
     // Define variables
     let base_address = address as *const c_void;
     let buffer_ptr = content.as_const_cvoid();
     let buffer_size = content.size_of_contents();
     let mut bytes_read: usize = 0;
-    // Do call
+    // Overwrite the memory
     unsafe { 
         WriteProcessMemory(
             *handle,
@@ -181,12 +179,10 @@ fn write_process_memory<T>(handle: &HANDLE, address: u64, content: Vec<T>) -> Re
         )?;
     }
     // Verify results
-    // First, let's see if the written byte count actually matches what we wanted to write.
-    if bytes_read != buffer_size {
-        // Do something
+    if content == read_process_memory::<T>(&handle, address, buffer_size)? {
+        return Ok(true);
     }
-    Ok(())
-
+    Ok(false)
 }
 
 
