@@ -226,16 +226,19 @@ fn main() {
     let some_variable: u32 = 12345;
     let variable_address = &some_variable as *const _ as u64;
 
-    let memory = read_process_memory::<u32>(&test.2, variable_address, std::mem::size_of::<u32>());
-    dbg!(memory.unwrap());
+    // let memory = read_process_memory::<u32>(&test.2, variable_address, std::mem::size_of::<u32>());
     
     let target = vec![22222u32];
 
     let written = write_process_memory(&test.2, variable_address, target);
+    match written { 
+        Err(e) => println!("Error: {:?}", e),
+        Ok(result) => { 
+            match result {
+                true => println!("Memory written succesfully."),
+                false => println!("Memory written unsuccesfully."),
+            }
+        }
+    }
 
-    let memory = read_process_memory::<u32>(&test.2, variable_address, std::mem::size_of::<u32>());
-    dbg!(memory.unwrap());
-
-
-    println!("{}", some_variable);
 }
