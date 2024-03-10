@@ -13,6 +13,7 @@ use windows::Win32::{
 use windows::core::PWSTR;
 use core::ffi::c_void;
 use std::path::PathBuf;
+use capstone::prelude::*;
 
 // Should I do a proper "vim" esc editor for memory? 
 // say I want to look at location N, and then start to overwrite the ASM with this tool
@@ -48,7 +49,7 @@ impl<T> WinUtils for Vec<T> {
         self.len() * std::mem::size_of::<T>()
     }
 }
-
+#[derive(Default, Debug)]
 struct WindowsProcess { 
     handle: HANDLE,
     process_name: String,
@@ -241,21 +242,47 @@ fn write_process_memory<T: Copy + Default + std::cmp::PartialEq>(handle: &HANDLE
     Ok(false)
 }
 
+// copy pasta, rewrite.
+fn hex_to_asm(bytes: &[u8]) -> Option<String> { 
+    let cs = Capstone::new()
+        .x86()
+        .mode(arch::x86::ArchMode::Mode64)
+        .syntax(arch::x86::ArchSyntax::Att)
+        .detail(true)
+        .build()
+        .expect("Failed to create Capstone object");
+
+    let insns = cs.disasm_all(bytes, 0x100)
+        .expect("Failed to disassemble bytes");
+
+    for i in insns.as_ref() {
+        return Some(format!("{}", i)); 
+    }
+    None
+}
+
+// 00007FF7F81A57C1: cmp [rbp+30h+var_60], 0
+// 140000000 <- base 
+// 0000000140001950: push rsi
+
+// todo: Rewrite this entire function. This is poor code as it stands.
 // Messing around with reading process memory. Attempts to map out memory to utf8. Changing the read_size can yield more readable utf8.
 fn dump_process_memory(handle: &HANDLE, base_address: u64, read_size: usize) {
     let mut loop_index = 0;
     loop { 
+        loop_index += read_size as u64;
         match read_process_memory::<u8>(&handle, base_address + loop_index, read_size){ 
             Err(e)          => break,
             Ok(memory_read) => {
-                let potential_text =String::from_utf8_lossy(&memory_read).replace('\u{FFFD}', ".");
+                //let potential_text = String::from_utf8_lossy(&memory_read).replace('\u{FFFD}', ".");
                 let hex: String = memory_read.iter().map(|b| format!("{:02X}", b)).collect();
-                let hex_string = format!("0x{}", hex);
-                println!("{:#x} -> {:?} => {}", (base_address  as u64) + loop_index, hex_string, potential_text)
-            
+                if hex == "00" {  continue; } // <- Makes debugging easier.
+                let hex_string = format!("0x{}", hex); 
+                let asm_instructions = hex_to_asm(&memory_read).unwrap_or(String::from("--"));
+
+                println!("{:#x} -> {:?} :: {}", (base_address  as u64) + loop_index, hex_string, asm_instructions);
             },
         }
-        loop_index += read_size as u64;
     }
 
 }
@@ -275,7 +302,7 @@ fn main() {
         let _process = WindowsProcess::new(handle, name, pid);
         formatted_list.push(_process);
     }
-
+    
     println!("Process count: {}", formatted_list.len());
     let current_process = &formatted_list[&formatted_list.len() - 1];
     // Print process information
@@ -283,25 +310,6 @@ fn main() {
 
     // Fetch the base address.
     let base_address = get_base_address(current_process.pid, &current_process.process_name).unwrap();
-    
-    /* Using a known good location for testing */
-    let some_variable: u32 = 12345;
-    let variable_address = &some_variable as *const _ as u64;
 
-    // Verifying if the page can be written to or not.
-    let page_status = check_memory_status(current_process.handle, base_address as u64).unwrap();
-    if page_status.1 == false { 
-        panic!("Page at {:?} marked as {:?}", base_address, page_status.0);
-    }
-    match write_process_memory(&current_process.handle, variable_address, vec![22222u32]) { 
-        Err(e) => println!("Error: {:?}", e),
-        Ok(result) => { 
-            match result {
-                true  => println!("Memory written succesfully."),
-                false => println!("Memory written unsuccesfully."),
-            }
-        }
-    }
-    dump_process_memory(&current_process.handle, base_address as u64, 16);
-       
+    dump_process_memory(&current_process.handle, base_address as u64, 1);
 }
