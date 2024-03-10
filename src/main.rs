@@ -16,7 +16,6 @@ fn pop_suffix<T: AsRef<[u16]>>(input: T) -> Vec<u16> {
     buffer
 }
 
-
 trait WinUtils {
     fn as_mut_cvoid(&mut self) -> *mut c_void;
     fn as_const_cvoid(&self) -> *const c_void;
@@ -33,6 +32,29 @@ impl<T> WinUtils for Vec<T> {
     }
     fn size_of_contents(&self) -> usize {
         self.len() * std::mem::size_of::<T>()
+    }
+}
+
+struct WindowsProcess { 
+    handle: HANDLE,
+    process_name: String,
+    file_path: PathBuf,
+    pid: u32,
+}
+
+impl WindowsProcess {
+    fn new(handle: HANDLE, file_path: PathBuf, pid: u32) -> Self {
+        let process_name = match file_path.file_name().and_then(|path| path.to_str()) {
+            Some(path_string) => String::from(path_string),
+            None => String::from("DefaultProcess"),
+        };
+
+        WindowsProcess { 
+            handle,
+            process_name,
+            file_path,
+            pid,
+        }
     }
 }
 
@@ -143,11 +165,6 @@ fn read_process_memory<T: Copy + Default>(handle: &HANDLE, address: u64, amount_
     let mut buffer = vec![T::default(); amount_to_read / std::mem::size_of::<T>()]; 
     let buffer_ptr = buffer.as_mut_cvoid();
     let mut bytes_read: usize = 0;
-    println!("Base address: {:?} \n\
-        Requested location: {:#x}", 
-        base_address, 
-        address);  
-    // ^ for debugging
 
     unsafe {
         ReadProcessMemory(
@@ -158,7 +175,6 @@ fn read_process_memory<T: Copy + Default>(handle: &HANDLE, address: u64, amount_
             Some(&mut bytes_read as *mut usize),
         )?;
     }
-    println!("Bytes read: {}", bytes_read); // <- for debugging
     Ok(buffer)
 }
 
@@ -185,10 +201,9 @@ fn write_process_memory<T: Copy + Default + std::cmp::PartialEq>(handle: &HANDLE
     Ok(false)
 }
 
-
 fn main() {
     let process_list = enumerate_processes().unwrap();
-    let mut formatted_list: Vec<(PathBuf, u32, HANDLE)> = Vec::new();
+    let mut formatted_list: Vec<WindowsProcess> = Vec::new();
     for pid in process_list {
         //let test = process_list[process_list.len() -1]; // Returns current processes handle.
         let handle = match get_handle(pid) { 
@@ -199,7 +214,8 @@ fn main() {
             Ok(name) => name,
             Err(_) => continue,
         };
-        formatted_list.push((name, pid, handle))
+        let _process = WindowsProcess::new(handle, name, pid);
+        formatted_list.push(_process);
     }
 
     println!("Process count: {}", formatted_list.len());
@@ -207,35 +223,23 @@ fn main() {
     let test = &formatted_list[&formatted_list.len() - 1];
     // Print process information
 
-    println!("Selected process: {}, {}", &test.0.file_name()
-                                                .unwrap()
-                                                .to_str()
-                                                .unwrap(), &test.1);
+    println!("Selected process: {}, pid: {}", &test.process_name, &test.pid);
     // Fetch the base address.
     
-    let addr = get_base_address(test.1, test.0.clone()
-                                    .file_name()
-                                    .unwrap()
-                                    .to_str()
-                                    .unwrap())
-                                    .unwrap();
-    
-    
-    
-    
+    let addr = get_base_address(test.pid, &test.process_name).unwrap();
     let some_variable: u32 = 12345;
     let variable_address = &some_variable as *const _ as u64;
-
-    // let memory = read_process_memory::<u32>(&test.2, variable_address, std::mem::size_of::<u32>());
     
-    let target = vec![22222u32];
+    let contents = read_process_memory::<u32>(&test.handle, variable_address, std::mem::size_of::<u32>()).unwrap()[0];
+    println!("Contents of location {:#x} -> {}", variable_address, contents);
+    let written = write_process_memory(&test.handle, variable_address, vec![22222u32]);
 
-    let written = write_process_memory(&test.2, variable_address, target);
+
     match written { 
         Err(e) => println!("Error: {:?}", e),
         Ok(result) => { 
             match result {
-                true => println!("Memory written succesfully."),
+                true  => println!("Memory written succesfully."),
                 false => println!("Memory written unsuccesfully."),
             }
         }
