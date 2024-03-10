@@ -192,7 +192,6 @@ fn check_memory_status(handle: HANDLE, address: u64, ) -> Result<(MEMORY_BASIC_I
     Ok((memory_info, can_overwrite))
 }
 
-
 fn read_process_memory<T: Copy + Default>(handle: &HANDLE, address: u64, amount_to_read: usize) -> Result<Vec<T>, windows::core::Error> {
     // Let's firstly prepare the types.
     let base_address = address as *const c_void;
@@ -258,9 +257,13 @@ fn main() {
     
     // Fetch the base address.
     let addr = get_base_address(current_process.pid, &current_process.process_name).unwrap();
+    /* Using a known good location for testing */
     let some_variable: u32 = 12345;
     let variable_address = &some_variable as *const _ as u64;
-    
+    let page_status = check_memory_status(current_process.handle, variable_address).unwrap();
+    if page_status.1 == false { 
+        panic!("Page at {:?} marked as {:?}", variable_address, page_status.0);
+    }
     let contents = read_process_memory::<u32>(&current_process.handle, variable_address, std::mem::size_of::<u32>()).unwrap()[0];
     println!("Contents of location {:#x} -> {}", variable_address, contents);
     let written = write_process_memory(&current_process.handle, variable_address, vec![22222u32]);
@@ -275,5 +278,4 @@ fn main() {
         }
     }
     
-    let memory_status = check_memory_status(current_process.handle, variable_address).unwrap();
 }
