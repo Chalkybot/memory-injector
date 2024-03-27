@@ -172,7 +172,7 @@ fn get_module(snapshot_handle: &HANDLE, first: bool) -> Result<MODULEENTRY32W, w
 } 
 
 // Find the first memory location of a program.
-fn get_base_address(pid: u32, target_module: &str) -> Result<*mut u8, windows::core::Error> {
+fn get_base_address(pid: u32, target_module: &str) -> Result<u64, windows::core::Error> {
     let mut base_address = 0 as *mut u8;
     let snapshot_handle = create_snapshot(pid)?;
     //let first_module_entry = get_module(&snapshot_handle, true).unwrap();
@@ -183,7 +183,7 @@ fn get_base_address(pid: u32, target_module: &str) -> Result<*mut u8, windows::c
             break;
         }
     }
-    Ok(base_address)
+    Ok(base_address as u64)
 }
 
 // Check whether or not a memory location can be modified.
@@ -263,7 +263,7 @@ fn get_image_dos_header(handle: &HANDLE, base_address: u64) -> Result<IMAGE_DOS_
     Ok(IMAGE_DOS_HEADER::from_bytes(&raw_data))
 }
 
-fn get_image_nt_headers(handle: &HANDLE, base_address: u64, dos_header: &IMAGE_DOS_HEADER) -> Result<IMAGE_NT_HEADERS64, windows::core::Error> {
+fn get_image_nt_header(handle: &HANDLE, base_address: u64, dos_header: &IMAGE_DOS_HEADER) -> Result<IMAGE_NT_HEADERS64, windows::core::Error> {
     let raw_data = read_process_memory::<u8>(handle, 
         base_address + dos_header.e_lfanew as u64, 
         std::mem::size_of::<IMAGE_NT_HEADERS64>()
@@ -272,13 +272,45 @@ fn get_image_nt_headers(handle: &HANDLE, base_address: u64, dos_header: &IMAGE_D
     Ok(IMAGE_NT_HEADERS64::from_bytes(&raw_data))
 }
 
-fn get_first_section_header(handle: &HANDLE, base_address: u64, dos_header: &IMAGE_DOS_HEADER) -> Result<IMAGE_SECTION_HEADER, windows::core::Error> {  
-    let location = base_address as u64 + dos_header.e_lfanew as u64 + std::mem::size_of::<IMAGE_NT_HEADERS64>() as u64;
-    let raw_data = read_process_memory::<u8>(handle, location, std::mem::size_of::<IMAGE_SECTION_HEADER>())?;
+// Change this to be get_section_header, and move away from base_address & dos_header to simply an
+// offset.
+fn get_section_header(handle: &HANDLE, offset: u64) -> Result<IMAGE_SECTION_HEADER, windows::core::Error> {  
+    //let location = base_address as u64 + dos_header.e_lfanew as u64 + std::mem::size_of::<IMAGE_NT_HEADERS64>() as u64;
+    let raw_data = read_process_memory::<u8>(handle, offset, std::mem::size_of::<IMAGE_SECTION_HEADER>())?;
     Ok(IMAGE_SECTION_HEADER::from_bytes(&raw_data))
 }
 
-
+// Returns the start of .text and the size of the section.
+fn get_section(handle: &HANDLE, base_address: u64, search_term: &str) -> Result<Option<(u64, u64)>, windows::core::Error> { 
+    let dos_header  = get_image_dos_header(handle, base_address)?;
+    let nt_header   = get_image_nt_header(handle, base_address, &dos_header)?;
+    let mut section_name = [0u8; 8];
+    section_name[..search_term.len()].copy_from_slice(search_term.as_bytes());
+    let mut current_offset = base_address + dos_header.e_lfanew as u64 + std::mem::size_of::<IMAGE_NT_HEADERS64>() as u64;
+    let mut section_size = 0;
+    let mut section_location = 0 ;
+    let mut section_count = (0..nt_header.FileHeader.NumberOfSections).peekable();
+    while let Some(_) = section_count.next() {
+        let text_header = get_section_header(handle, current_offset)?;
+        section_location = base_address + text_header.VirtualAddress as u64;
+        section_size = unsafe { text_header.Misc.VirtualSize as u64}; 
+        if text_header.Name == section_name {  
+            break; 
+        }   
+        current_offset += std::mem::size_of::<IMAGE_SECTION_HEADER>() as u64;
+        if section_count.peek().is_none() { 
+            return Ok(None) 
+        } 
+    }
+    Ok(
+        Some(
+            (
+            section_location, 
+            section_size
+            )
+        )
+    )
+}
 
 
 // copy pasta, rewrite.
@@ -352,11 +384,7 @@ fn main() {
     let base_address = get_base_address(current_process.pid, &current_process.process_name).unwrap();
     // Let's fetch the .text section's start:
     // Wrap dos_header and nt_header to be inside of first_section_header
-    let dos_header = get_image_dos_header(&current_process.handle, base_address as u64).unwrap(); 
-    let nt_header = get_image_nt_headers(&current_process.handle, base_address as u64, &dos_header).unwrap();
-    let first_section_header = get_first_section_header(&current_process.handle, base_address as u64, &dos_header).unwrap();
-    let asm_start = base_address as u64 + first_section_header.VirtualAddress as u64;
-    let entire_asm = unsafe { read_process_memory::<u8>(&current_process.handle, asm_start, first_section_header.Misc.VirtualSize as usize).unwrap() };
-    hex_to_asm(&entire_asm);
+    dbg!(get_section(&current_process.handle, base_address, ".text"));
+    //hex_to_asm(&entire_asm);
     //dump_process_memory(&current_process.handle, base_address as u64, 1);
 }
