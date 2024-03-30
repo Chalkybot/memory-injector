@@ -15,6 +15,7 @@ use windows::core::PWSTR;
 use core::ffi::c_void;
 use std::path::PathBuf;
 use capstone::prelude::*;
+
 // Should I do a proper "vim" esc editor for memory? 
 // say I want to look at location N, and then start to overwrite the ASM with this tool
 
@@ -49,7 +50,6 @@ trait WinUtils {
     fn as_mut_cvoid(&mut self) -> *mut c_void;
     fn as_const_cvoid(&self) -> *const c_void;
     fn size_of_contents(&self) -> usize;
-     // fn cast_as(&self) -> usize;
 }
 
 impl<T> WinUtils for Vec<T> {
@@ -107,7 +107,7 @@ fn enumerate_processes() -> Result<Vec<u32>, windows::core::Error> {
 }
 // Turn an ID to a handle.
 fn get_handle(pid: u32) -> Result<HANDLE, windows::core::Error> {
-    let desired_access = PROCESS_ACCESS_RIGHTS(0xFFFF); //0x0010 | 0x0020 | 0x0008 | 0x0400);
+    let desired_access = PROCESS_ACCESS_RIGHTS(0xFFFF); //0x0010 | 0x0020 | 0x0008 | 0x0400 <- Correct flags, at the moment, we are using debug flags.
     let mut handle = HANDLE::default();
     unsafe {
         handle = OpenProcess(
@@ -134,9 +134,6 @@ fn get_process_name(handle: &HANDLE) -> Result<PathBuf, windows::core::Error> {
         )?;
     }
     // Cleaning up the buffer.
-    /*while let Some(&0) = return_buffer.last() {
-        return_buffer.pop();
-    }*/
     return_buffer = pop_suffix(return_buffer);
     Ok(PathBuf::from(String::from_utf16_lossy(&return_buffer)))
 }
@@ -268,14 +265,10 @@ fn get_image_nt_header(handle: &HANDLE, base_address: u64, dos_header: &IMAGE_DO
         base_address + dos_header.e_lfanew as u64, 
         std::mem::size_of::<IMAGE_NT_HEADERS64>()
     )?;
-    
     Ok(IMAGE_NT_HEADERS64::from_bytes(&raw_data))
 }
 
-// Change this to be get_section_header, and move away from base_address & dos_header to simply an
-// offset.
 fn get_section_header(handle: &HANDLE, offset: u64) -> Result<IMAGE_SECTION_HEADER, windows::core::Error> {  
-    //let location = base_address as u64 + dos_header.e_lfanew as u64 + std::mem::size_of::<IMAGE_NT_HEADERS64>() as u64;
     let raw_data = read_process_memory::<u8>(handle, offset, std::mem::size_of::<IMAGE_SECTION_HEADER>())?;
     Ok(IMAGE_SECTION_HEADER::from_bytes(&raw_data))
 }
@@ -290,6 +283,7 @@ fn get_section(handle: &HANDLE, base_address: u64, search_term: &str) -> Result<
     let mut section_size = 0;
     let mut section_location = 0 ;
     let mut section_count = (0..nt_header.FileHeader.NumberOfSections).peekable();
+
     while let Some(_) = section_count.next() {
         let text_header = get_section_header(handle, current_offset)?;
         section_location = base_address + text_header.VirtualAddress as u64;
@@ -312,7 +306,6 @@ fn get_section(handle: &HANDLE, base_address: u64, search_term: &str) -> Result<
     )
 }
 
-
 // copy pasta, rewrite.
 fn hex_to_asm(bytes: &[u8]) { // -> Option<String> { 
     let cs = Capstone::new()
@@ -330,34 +323,6 @@ fn hex_to_asm(bytes: &[u8]) { // -> Option<String> {
         println!("{} :: {}", i, i.len());
     }
 }
-
-// 00007FF7F81A57C1: cmp [rbp+30h+var_60], 0
-// 140000000 <- base 
-// 0000000140001950: push rsi
-
-// todo: Rewrite this entire function. This is poor code as it stands.
-// Messing around with reading process memory. Attempts to map out memory to utf8. Changing the read_size can yield more readable utf8.
-/*
-fn dump_process_memory(handle: &HANDLE, base_address: u64, read_size: usize) {
-    let mut loop_index = 0;
-    loop { 
-        loop_index += read_size as u64;
-        match read_process_memory::<u8>(&handle, base_address + loop_index, read_size){ 
-            Err(e)          => break,
-            Ok(memory_read) => {
-                //let potential_text = String::from_utf8_lossy(&memory_read).replace('\u{FFFD}', ".");
-                let hex: String = memory_read.iter().map(|b| format!("{:02X}", b)).collect();
-                if hex == "00" {  continue; } // <- Makes debugging easier.
-                let hex_string = format!("0x{}", hex); 
-                let asm_instructions = hex_to_asm(&memory_read).unwrap_or(String::from("--"));
-
-                println!("{:#x} -> {:?} :: {}", (base_address  as u64) + loop_index, hex_string, asm_instructions);
-            },
-        }
-    }
-
-}
-*/
 
 fn main() {
     let process_list = enumerate_processes().unwrap();
@@ -384,7 +349,7 @@ fn main() {
     let base_address = get_base_address(current_process.pid, &current_process.process_name).unwrap();
     // Let's fetch the .text section's start:
     // Wrap dos_header and nt_header to be inside of first_section_header
-    dbg!(get_section(&current_process.handle, base_address, ".text"));
-    //hex_to_asm(&entire_asm);
-    //dump_process_memory(&current_process.handle, base_address as u64, 1);
+    let text_section_info = get_section(&current_process.handle, base_address, ".text").unwrap().unwrap();
+    let entire_asm = read_process_memory::<u8>(&current_process.handle, text_section_info.0, text_section_info.1 as usize).unwrap();
+    hex_to_asm(&entire_asm);
 }
