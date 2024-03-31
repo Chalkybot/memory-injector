@@ -15,7 +15,6 @@ use windows::core::PWSTR;
 use core::ffi::c_void;
 use std::path::PathBuf;
 use capstone::prelude::*;
-
 // Should I do a proper "vim" esc editor for memory? 
 // say I want to look at location N, and then start to overwrite the ASM with this tool
 
@@ -306,22 +305,32 @@ fn get_section(handle: &HANDLE, base_address: u64, search_term: &str) -> Result<
     )
 }
 
-// copy pasta, rewrite.
-fn hex_to_asm(bytes: &[u8]) { // -> Option<String> { 
-    let cs = Capstone::new()
+/* 
+Correct first bytes:
+0x0: testq %rdx, %rdx
+0x3: je 0x10
+0x5: movl $1, %r8d
+0xb: jmp 0x1dd0
+0x10: retq 
+*/
+
+
+fn disasm_binary(bytes: &[u8], offset: u64) -> Result<Vec<String>, Box<dyn std::error::Error>> { 
+    let capstone_engine = Capstone::new()
         .x86()
         .mode(arch::x86::ArchMode::Mode64)
-        .syntax(arch::x86::ArchSyntax::Att)
-        .detail(true)
-        .build()
-        .expect("Failed to create Capstone object");
+        .syntax(arch::x86::ArchSyntax::Intel)
+        .detail(false)
+        .build()?;
 
-    let insns = cs.disasm_all(bytes, 0x00)
-        .expect("Failed to disassemble bytes");
+    let disassembled_instructions = capstone_engine.disasm_all(bytes, offset)?;
+    let mut instructions: Vec<String> = vec![];
 
-    for i in insns.as_ref() {
-        println!("{} :: {}", i, i.len());
+    for i in disassembled_instructions.as_ref() {
+        let formatted_instruction = format!("{}", i);
+        instructions.push(formatted_instruction);
     }
+    Ok(instructions)
 }
 
 fn main() {
@@ -348,8 +357,11 @@ fn main() {
     // Fetch the base address.
     let base_address = get_base_address(current_process.pid, &current_process.process_name).unwrap();
     // Let's fetch the .text section's start:
-    // Wrap dos_header and nt_header to be inside of first_section_header
     let text_section_info = get_section(&current_process.handle, base_address, ".text").unwrap().unwrap();
     let entire_asm = read_process_memory::<u8>(&current_process.handle, text_section_info.0, text_section_info.1 as usize).unwrap();
-    hex_to_asm(&entire_asm);
+    let ins = disasm_binary(&entire_asm, text_section_info.0).unwrap();
+    for instruction in ins { 
+        println!("{}", instruction);
+    }
+
 }
